@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -631,8 +632,8 @@ func (c *Compiler) SetImportDir(dir string) {
 //
 // Use this method if you want other source file extension than ".tengo".
 //
-//     // this will search for *.tengo, *.foo, *.bar
-//     err := c.SetImportFileExt(".tengo", ".foo", ".bar")
+//	// this will search for *.tengo, *.foo, *.bar
+//	err := c.SetImportFileExt(".tengo", ".foo", ".bar")
 //
 // This function requires at least one argument, since it will replace the
 // current list of extension name.
@@ -1316,25 +1317,58 @@ func (c *Compiler) printTrace(a ...interface{}) {
 }
 
 func (c *Compiler) getPathModule(moduleName string) (pathFile string, err error) {
+	checkPaths := getScriptLibPath(c.importDir)
 	for _, ext := range c.importFileExt {
-		nameFile := moduleName
-
+		nameFile := filepath.ToSlash(moduleName)
 		if !strings.HasSuffix(nameFile, ext) {
 			nameFile += ext
 		}
-
-		pathFile, err = filepath.Abs(filepath.Join(c.importDir, nameFile))
-		if err != nil {
-			continue
+		if strings.HasPrefix(nameFile, "/") ||
+			strings.HasPrefix(nameFile, "../") ||
+			strings.HasPrefix(nameFile, "./") ||
+			strings.Contains(nameFile, ":") {
+			return nameFile, nil
 		}
-
-		// Check if file exists
-		if _, err := os.Stat(pathFile); !errors.Is(err, os.ErrNotExist) {
-			return pathFile, nil
+		for _, dir := range checkPaths {
+			pathFile, err = filepath.Abs(filepath.Join(dir, nameFile))
+			if err != nil {
+				return "", err
+			}
+			// Check if file exists
+			if _, err = os.Stat(pathFile); !errors.Is(err, os.ErrNotExist) {
+				return pathFile, nil
+			}
 		}
 	}
 
 	return "", fmt.Errorf("module '%s' not found at: %s", moduleName, pathFile)
+}
+
+func getScriptLibPath(importDir string) []string {
+	list := []string{importDir, "."}
+	list = append(list, strings.Split(os.Getenv("TENGO_LIB_PATH"), ";")...)
+	homeDir, err := getHomeDir()
+	if err == nil {
+		list = append(list, filepath.Join(homeDir, ".tengo", "lib"))
+	}
+	used := make(map[string]bool)
+	var ret []string
+	for _, v := range list {
+		v = filepath.ToSlash(strings.TrimSpace(v))
+		if v != "" && !used[v] {
+			ret = append(ret, v)
+			used[v] = true
+		}
+	}
+	return ret
+}
+
+func getHomeDir() (string, error) {
+	u, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	return u.HomeDir, nil
 }
 
 func resolveAssignLHS(
